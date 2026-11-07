@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Ruff and tests
+.ruff_cache/
+.pytest_cache/
+.coverage
+
+# macOS and VS Code
+.DS_Store
+.vscode/
+
+# Secrets
+.env
+.env.*
+!.env.example
+config.local.json
+
+# Runtime data
+data/*.json
+!data/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# Demo recordings
+*.cast
