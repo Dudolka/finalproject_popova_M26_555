@@ -187,3 +187,101 @@ class Wallet:
             currency_code=data["currency_code"],
             balance=data["balance"],
         )
+
+
+class Portfolio:
+    """Manage a user's currency wallets."""
+
+    def __init__(self, user: User) -> None:
+        if not isinstance(user, User):
+            raise TypeError("Владелец портфеля должен быть объектом User")
+
+        self._user = user
+        self._wallets: dict[str, Wallet] = {}
+
+    @property
+    def user(self) -> User:
+        """Return the portfolio owner."""
+        return self._user
+
+    @property
+    def wallets(self) -> dict[str, Wallet]:
+        """Return a copy of the wallet mapping."""
+        return self._wallets.copy()
+
+    def add_currency(self, currency_code: str) -> Wallet:
+        """Create a wallet or return an existing one."""
+        if not isinstance(currency_code, str) or not currency_code.strip():
+            raise ValueError("Код валюты не может быть пустым")
+
+        code = currency_code.strip().upper()
+
+        if code not in self._wallets:
+            self._wallets[code] = Wallet(code)
+
+        return self._wallets[code]
+
+    def get_wallet(self, currency_code: str) -> Wallet:
+        """Return a wallet by currency code."""
+        if not isinstance(currency_code, str) or not currency_code.strip():
+            raise ValueError("Код валюты не может быть пустым")
+
+        code = currency_code.strip().upper()
+
+        if code not in self._wallets:
+            raise ValueError(f"Кошелёк {code} не найден")
+
+        return self._wallets[code]
+
+    def get_total_value(self, rates: dict[str, float]) -> float:
+        """Calculate portfolio value in USD using USD rates."""
+        if not isinstance(rates, dict):
+            raise TypeError("Курсы валют должны быть словарём")
+
+        total = 0.0
+
+        for code, wallet in self._wallets.items():
+            if wallet.balance == 0:
+                continue
+
+            if code == "USD":
+                rate = 1.0
+            else:
+                if code not in rates:
+                    raise ValueError(f"Курс валюты {code} не найден")
+                rate = rates[code]
+
+            Wallet._validate_amount(rate)
+            total += wallet.balance * rate
+
+        if not 0 <= total < float("inf"):
+            raise ValueError("Стоимость портфеля превышает допустимое значение")
+
+        return total
+
+    def to_dict(self) -> dict:
+        """Serialize the portfolio for JSON storage."""
+        return {
+            "user_id": self._user.user_id,
+            "wallets": {
+                code: wallet.to_dict() for code, wallet in self._wallets.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, user: User) -> "Portfolio":
+        """Restore a portfolio and its wallets."""
+        if data["user_id"] != user.user_id:
+            raise ValueError("Портфель принадлежит другому пользователю")
+
+        portfolio = cls(user)
+
+        for code, wallet_data in data["wallets"].items():
+            wallet = Wallet.from_dict(wallet_data)
+
+            if code != wallet.currency_code:
+                raise ValueError("Код валюты не совпадает с данными кошелька")
+
+            portfolio._wallets[code] = wallet
+
+        return portfolio
