@@ -117,3 +117,73 @@ class User:
             salt=data["salt"],
             registration_date=datetime.fromisoformat(data["registration_date"]),
         )
+
+
+class Wallet:
+    """Represent a currency wallet with a non-negative balance."""
+
+    def __init__(self, currency_code: str, balance: float = 0.0) -> None:
+        if not isinstance(currency_code, str) or not currency_code.strip():
+            raise ValueError("Код валюты не может быть пустым")
+
+        if not isinstance(balance, (int, float)) or isinstance(balance, bool):
+            raise TypeError("Баланс должен быть числом")
+
+        if not 0 <= balance < float("inf"):
+            raise ValueError("Баланс должен быть конечным и неотрицательным")
+
+        self._currency_code = currency_code.strip().upper()
+        self._balance = float(balance)
+
+    @property
+    def currency_code(self) -> str:
+        """Return the currency code."""
+        return self._currency_code
+
+    @property
+    def balance(self) -> float:
+        """Return the current balance."""
+        return self._balance
+
+    def deposit(self, amount: float) -> None:
+        """Add a positive amount to the wallet."""
+        self._validate_amount(amount)
+
+        new_balance = self._balance + amount
+        if not new_balance < float("inf"):
+            raise ValueError("Баланс после пополнения превышает допустимое значение")
+
+        self._balance = new_balance
+
+    def withdraw(self, amount: float) -> None:
+        """Withdraw an amount if sufficient funds are available."""
+        self._validate_amount(amount)
+
+        if amount > self._balance:
+            raise ValueError("Недостаточно средств на кошельке")
+
+        self._balance -= amount
+
+    @staticmethod
+    def _validate_amount(amount: float) -> None:
+        """Validate a transaction amount."""
+        if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+            raise TypeError("Сумма операции должна быть числом")
+
+        if not 0 < amount < float("inf"):
+            raise ValueError("Сумма должна быть положительным конечным числом")
+
+    def to_dict(self) -> dict:
+        """Serialize the wallet for JSON storage."""
+        return {
+            "currency_code": self._currency_code,
+            "balance": self._balance,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Wallet":
+        """Restore a wallet from JSON-compatible data."""
+        return cls(
+            currency_code=data["currency_code"],
+            balance=data["balance"],
+        )
