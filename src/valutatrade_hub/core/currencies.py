@@ -2,6 +2,8 @@
 
 from abc import ABC, abstractmethod
 
+from valutatrade_hub.core.exceptions import CurrencyNotFoundError
+
 
 class Currency(ABC):
     """Abstract base class for currencies."""
@@ -18,12 +20,10 @@ class Currency(ABC):
 
     @property
     def code(self) -> str:
-        """Return the currency code."""
         return self._code
 
     @property
     def name(self) -> str:
-        """Return the currency name."""
         return self._name
 
     @property
@@ -36,7 +36,6 @@ class Currency(ABC):
         """Return a human-readable currency description."""
 
     def to_dict(self) -> dict:
-        """Serialize the currency."""
         return {
             "code": self.code,
             "name": self.name,
@@ -49,11 +48,9 @@ class FiatCurrency(Currency):
 
     @property
     def currency_type(self) -> str:
-        """Return the fiat currency category."""
         return "fiat"
 
     def get_display_info(self) -> str:
-        """Return a description of the fiat currency."""
         return f"{self.code} — {self.name} (фиатная валюта)"
 
 
@@ -62,11 +59,9 @@ class CryptoCurrency(Currency):
 
     @property
     def currency_type(self) -> str:
-        """Return the cryptocurrency category."""
         return "crypto"
 
     def get_display_info(self) -> str:
-        """Return a description of the cryptocurrency."""
         return f"{self.code} — {self.name} (криптовалюта)"
 
 
@@ -87,7 +82,7 @@ def create_currency(code: str) -> Currency:
     normalized_code = code.strip().upper()
 
     if normalized_code not in SUPPORTED_CURRENCIES:
-        raise ValueError(f"Неподдерживаемая валюта: {normalized_code}")
+        raise CurrencyNotFoundError(f"Неподдерживаемая валюта: {normalized_code}")
 
     name, currency_class = SUPPORTED_CURRENCIES[normalized_code]
     return currency_class(normalized_code, name)

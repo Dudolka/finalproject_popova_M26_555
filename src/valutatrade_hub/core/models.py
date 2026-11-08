@@ -5,6 +5,11 @@ import hmac
 import secrets
 from datetime import datetime
 
+from valutatrade_hub.core.exceptions import (
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
+
 
 class User:
     """Represent a registered user with password verification."""
@@ -19,16 +24,12 @@ class User:
     ) -> None:
         if type(user_id) is not int or user_id <= 0:
             raise ValueError("ID пользователя должен быть положительным целым числом")
-
         if not isinstance(username, str) or not username.strip():
             raise ValueError("Имя пользователя не может быть пустым")
-
         if not isinstance(hashed_password, str):
             raise TypeError("Хеш пароля должен быть строкой")
-
         if not isinstance(salt, str) or not salt:
             raise ValueError("Соль не может быть пустой")
-
         if not isinstance(registration_date, datetime):
             raise TypeError("Дата регистрации должна иметь тип datetime")
 
@@ -40,38 +41,31 @@ class User:
 
     @property
     def user_id(self) -> int:
-        """Return the user identifier."""
         return self._user_id
 
     @property
     def username(self) -> str:
-        """Return the username."""
         return self._username
 
     @username.setter
     def username(self, value: str) -> None:
-        """Validate and update the username."""
         if not isinstance(value, str) or not value.strip():
             raise ValueError("Имя пользователя не может быть пустым")
         self._username = value.strip()
 
     @property
     def hashed_password(self) -> str:
-        """Return the stored password hash for persistence."""
         return self._hashed_password
 
     @property
     def salt(self) -> str:
-        """Return the salt used for password hashing."""
         return self._salt
 
     @property
     def registration_date(self) -> datetime:
-        """Return the registration date."""
         return self._registration_date
 
     def change_password(self, new_password: str) -> None:
-        """Validate and hash a new password with a fresh salt."""
         if not isinstance(new_password, str) or len(new_password) < 4:
             raise ValueError("Пароль должен быть не короче 4 символов")
 
@@ -81,16 +75,17 @@ class User:
         ).hexdigest()
 
     def verify_password(self, password: str) -> bool:
-        """Check a password without exposing the stored hash."""
         if not isinstance(password, str):
             return False
 
         candidate = hashlib.sha256((password + self._salt).encode("utf-8")).hexdigest()
 
-        return hmac.compare_digest(candidate, self._hashed_password)
+        return hmac.compare_digest(
+            candidate,
+            self._hashed_password,
+        )
 
     def get_user_info(self) -> dict:
-        """Return public user information without password credentials."""
         return {
             "user_id": self._user_id,
             "username": self._username,
@@ -98,7 +93,6 @@ class User:
         }
 
     def to_dict(self) -> dict:
-        """Serialize the user for JSON storage."""
         return {
             "user_id": self._user_id,
             "username": self._username,
@@ -109,7 +103,6 @@ class User:
 
     @classmethod
     def from_dict(cls, data: dict) -> "User":
-        """Restore a user from JSON-compatible data."""
         return cls(
             user_id=data["user_id"],
             username=data["username"],
@@ -122,7 +115,11 @@ class User:
 class Wallet:
     """Represent a currency wallet with a non-negative balance."""
 
-    def __init__(self, currency_code: str, balance: float = 0.0) -> None:
+    def __init__(
+        self,
+        currency_code: str,
+        balance: float = 0.0,
+    ) -> None:
         if not isinstance(currency_code, str) or not currency_code.strip():
             raise ValueError("Код валюты не может быть пустым")
 
@@ -137,36 +134,34 @@ class Wallet:
 
     @property
     def currency_code(self) -> str:
-        """Return the currency code."""
         return self._currency_code
 
     @property
     def balance(self) -> float:
-        """Return the current balance."""
         return self._balance
 
     def deposit(self, amount: float) -> None:
-        """Add a positive amount to the wallet."""
+        """Add funds to the wallet."""
         self._validate_amount(amount)
 
         new_balance = self._balance + amount
+
         if not new_balance < float("inf"):
             raise ValueError("Баланс после пополнения превышает допустимое значение")
 
         self._balance = new_balance
 
     def withdraw(self, amount: float) -> None:
-        """Withdraw an amount if sufficient funds are available."""
+        """Withdraw funds, checking available balance."""
         self._validate_amount(amount)
 
         if amount > self._balance:
-            raise ValueError("Недостаточно средств на кошельке")
+            raise InsufficientFundsError("Недостаточно средств на кошельке")
 
         self._balance -= amount
 
     @staticmethod
     def _validate_amount(amount: float) -> None:
-        """Validate a transaction amount."""
         if not isinstance(amount, (int, float)) or isinstance(amount, bool):
             raise TypeError("Сумма операции должна быть числом")
 
@@ -174,7 +169,6 @@ class Wallet:
             raise ValueError("Сумма должна быть положительным конечным числом")
 
     def to_dict(self) -> dict:
-        """Serialize the wallet for JSON storage."""
         return {
             "currency_code": self._currency_code,
             "balance": self._balance,
@@ -182,7 +176,6 @@ class Wallet:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Wallet":
-        """Restore a wallet from JSON-compatible data."""
         return cls(
             currency_code=data["currency_code"],
             balance=data["balance"],
@@ -201,16 +194,14 @@ class Portfolio:
 
     @property
     def user(self) -> User:
-        """Return the portfolio owner."""
         return self._user
 
     @property
     def wallets(self) -> dict[str, Wallet]:
-        """Return a copy of the wallet mapping."""
         return self._wallets.copy()
 
     def add_currency(self, currency_code: str) -> Wallet:
-        """Create a wallet or return an existing one."""
+        """Add a currency wallet if it does not already exist."""
         if not isinstance(currency_code, str) or not currency_code.strip():
             raise ValueError("Код валюты не может быть пустым")
 
@@ -222,19 +213,19 @@ class Portfolio:
         return self._wallets[code]
 
     def get_wallet(self, currency_code: str) -> Wallet:
-        """Return a wallet by currency code."""
+        """Return a wallet or raise CurrencyNotFoundError."""
         if not isinstance(currency_code, str) or not currency_code.strip():
             raise ValueError("Код валюты не может быть пустым")
 
         code = currency_code.strip().upper()
 
         if code not in self._wallets:
-            raise ValueError(f"Кошелёк {code} не найден")
+            raise CurrencyNotFoundError(f"Кошелёк {code} не найден")
 
         return self._wallets[code]
 
     def get_total_value(self, rates: dict[str, float]) -> float:
-        """Calculate portfolio value in USD using USD rates."""
+        """Calculate total portfolio value in USD."""
         if not isinstance(rates, dict):
             raise TypeError("Курсы валют должны быть словарём")
 
@@ -248,7 +239,7 @@ class Portfolio:
                 rate = 1.0
             else:
                 if code not in rates:
-                    raise ValueError(f"Курс валюты {code} не найден")
+                    raise CurrencyNotFoundError(f"Курс валюты {code} не найден")
                 rate = rates[code]
 
             Wallet._validate_amount(rate)
@@ -260,7 +251,7 @@ class Portfolio:
         return total
 
     def to_dict(self) -> dict:
-        """Serialize the portfolio for JSON storage."""
+        """Serialize the portfolio."""
         return {
             "user_id": self._user.user_id,
             "wallets": {
@@ -270,7 +261,7 @@ class Portfolio:
 
     @classmethod
     def from_dict(cls, data: dict, user: User) -> "Portfolio":
-        """Restore a portfolio and its wallets."""
+        """Restore a portfolio from serialized data."""
         if data["user_id"] != user.user_id:
             raise ValueError("Портфель принадлежит другому пользователю")
 
