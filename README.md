@@ -288,3 +288,9 @@ uv tool run --from asciinema asciinema play demo/ValutaTrade_Hub.cast
 `update-rates --source coingecko` и `update-rates --source exchangerate`
 (для второго источника требуется действующий `EXCHANGE_RATE_API_KEY`).
 Проверьте даты, источники и направления котировок. Не публикуйте API-ключи.
+
+## Демонстрация работы
+
+[Смотреть демонстрацию ValutaTrade Hub на asciinema](https://asciinema.org/a/cpXOtA4FRYvAENle)
+
+Демонстрация показывает регистрацию, авторизацию, пополнение виртуального баланса, покупку и продажу валют, просмотр портфеля, обновление курсов и обработку ошибок.
