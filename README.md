@@ -259,9 +259,9 @@ uv run ruff format --check .
 
 ## Демонстрация для задания МИФИ
 
-**[Открыть запись демонстрации ValutaTrade Hub (.cast)](https://github.com/Dudolka/finalproject_popova_M26_555/blob/main/demo/ValutaTrade_Hub.cast)**
+**[Смотреть демонстрацию ValutaTrade Hub на asciinema](https://asciinema.org/a/cpXOtA4FRYvAENle)**
 
-> GitHub показывает содержимое файла `.cast`, но не воспроизводит его как видео. Для просмотра записи скачайте файл и запустите через asciinema по инструкции ниже.
+> Демонстрация опубликована на asciinema.org и доступна для просмотра непосредственно в браузере. Исходный файл записи также хранится в `demo/ValutaTrade_Hub.cast`.
 
 В папке `demo/` находится asciinema-файл `ValutaTrade_Hub.cast`, а
 `scripts/record_demo.py` записывает воспроизводимую **офлайн-демонстрацию**
