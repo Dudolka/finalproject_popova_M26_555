@@ -190,10 +190,13 @@ class TestLogOperation(unittest.TestCase):
         def fail():
             raise RuntimeError("api_key=very-secret")
 
-        with self.assertLogs(
-            "valutatrade_hub.decorators",
-            level="ERROR",
-        ) as captured, self.assertRaises(RuntimeError):
+        with (
+            self.assertLogs(
+                "valutatrade_hub.decorators",
+                level="ERROR",
+            ) as captured,
+            self.assertRaises(RuntimeError),
+        ):
             fail()
 
         output = "\n".join(captured.output)

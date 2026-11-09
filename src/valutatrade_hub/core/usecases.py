@@ -1,6 +1,7 @@
 """Application use cases for ValutaTrade Hub."""
 
 import logging
+import math
 from datetime import UTC, datetime
 
 from valutatrade_hub.core.currencies import create_currency
@@ -19,7 +20,7 @@ logger = logging.getLogger("valutatrade_hub.trading")
 def _get_database(
     database: DatabaseManager | None,
 ) -> DatabaseManager:
-    """Return the injected database or the default database."""
+    """Return an injected database or the configured database."""
     if database is not None:
         return database
 
@@ -43,7 +44,7 @@ def _log_trade_details(
     rate: float,
     total_usd: float,
 ) -> None:
-    """Log the details of a successfully saved transaction."""
+    """Log details of a successfully persisted transaction."""
     logger.info(
         "TRADE DETAILS | action=%s | status=COMMITTED "
         "| user_id=%s | username=%s | currency=%s "
@@ -65,6 +66,7 @@ class UserService:
         self,
         database: DatabaseManager | None = None,
     ) -> None:
+        """Initialize the user service."""
         self._database = _get_database(database)
 
     def register(
@@ -72,7 +74,7 @@ class UserService:
         username: str,
         password: str,
     ) -> User:
-        """Register a new user and save their credentials."""
+        """Register and persist a new user."""
         if not isinstance(username, str):
             raise TypeError("Имя пользователя должно быть строкой")
 
@@ -168,6 +170,7 @@ class TradingService:
         database: DatabaseManager | None = None,
         settings: SettingsLoader | None = None,
     ) -> None:
+        """Initialize trading dependencies."""
         self._database = _get_database(database)
         self._settings = settings if settings is not None else SettingsLoader()
         self._users = UserService(self._database)
@@ -208,35 +211,46 @@ class TradingService:
     def _check_rate_freshness(
         self,
         rates_data: dict,
+        rate_entry: dict | None = None,
     ) -> None:
-        """Reject missing, invalid, future, or expired timestamps."""
-        timestamp_value = rates_data.get("last_refresh")
+        """Reject an expired or invalid individual exchange rate.
+
+        The current format uses the pair's updated_at timestamp.
+        The previous numeric format uses snapshot last_refresh.
+        """
+        if rate_entry is None:
+            timestamp_value = rates_data.get("last_refresh")
+        else:
+            timestamp_value = rate_entry.get("updated_at")
 
         if not isinstance(timestamp_value, str):
             raise ApiRequestError(
-                "Время обновления курсов отсутствует. Выполните update-rates."
+                "Время обновления курса отсутствует. Выполните update-rates."
             )
 
         try:
             timestamp = datetime.fromisoformat(timestamp_value)
         except ValueError as exc:
             raise ApiRequestError(
-                "Некорректное время обновления курсов. Выполните update-rates."
+                "Некорректное время обновления курса. Выполните update-rates."
             ) from exc
 
         if timestamp.tzinfo is None:
             raise ApiRequestError(
-                "Время обновления курсов не содержит "
+                "Время обновления курса не содержит "
                 "часовой пояс. Выполните update-rates."
             )
 
         age_seconds = (datetime.now(UTC) - timestamp.astimezone(UTC)).total_seconds()
 
-        if age_seconds < 0 or age_seconds >= self._settings.rates_ttl_seconds:
+        if (
+            not math.isfinite(age_seconds)
+            or age_seconds < 0
+            or age_seconds >= self._settings.rates_ttl_seconds
+        ):
             raise ApiRequestError(
-                "Курсы валют устарели или имеют "
-                "некорректное время обновления. "
-                "Выполните update-rates."
+                "Курс валюты устарел или имеет некорректное "
+                "время обновления. Выполните update-rates."
             )
 
     def _get_rate(
@@ -252,7 +266,14 @@ class TradingService:
             return 1.0
 
         rates_data = self._database.load_rates()
+
+        if not isinstance(rates_data, dict):
+            raise ApiRequestError("Некорректный формат кэша валютных курсов")
+
         pairs = rates_data.get("pairs", {})
+
+        if not isinstance(pairs, dict):
+            raise ApiRequestError("Поле pairs в кэше курсов должно быть словарём")
 
         pair = f"{code}_USD"
 
@@ -261,11 +282,41 @@ class TradingService:
                 f"Курс {pair} отсутствует. Обновите курсы валют."
             )
 
-        rate = pairs[pair]
-        Wallet._validate_amount(rate)
+        entry = pairs[pair]
+
+        if isinstance(entry, dict):
+            # Required format from the MEPhI assignment.
+            rate = entry.get("rate")
+            updated_at = entry.get("updated_at")
+            source = entry.get("source")
+
+            if not isinstance(updated_at, str):
+                raise ApiRequestError(
+                    f"Для {pair} отсутствует updated_at. Выполните update-rates."
+                )
+
+            if not isinstance(source, str) or not source.strip():
+                raise ApiRequestError(f"Для {pair} отсутствует источник курса")
+
+            rate_entry = entry
+        else:
+            # Transitional compatibility with numeric cache entries.
+            rate = entry
+            rate_entry = None
+
+        if (
+            isinstance(rate, bool)
+            or not isinstance(rate, (int, float))
+            or not math.isfinite(rate)
+            or rate <= 0
+        ):
+            raise ApiRequestError(f"Некорректное значение курса {pair}")
 
         if require_fresh:
-            self._check_rate_freshness(rates_data)
+            self._check_rate_freshness(
+                rates_data,
+                rate_entry,
+            )
 
         return float(rate)
 
@@ -290,7 +341,7 @@ class TradingService:
         currency_code: str,
         amount: float,
     ) -> Portfolio:
-        """Buy currency at a fresh exchange rate."""
+        """Buy currency using a fresh exchange rate."""
         Wallet._validate_amount(amount)
 
         currency = create_currency(currency_code)
@@ -310,11 +361,11 @@ class TradingService:
         portfolio = self.get_portfolio(user_id)
         usd_wallet = portfolio.add_currency("USD")
 
-        # Validate and perform the trade in memory.
+        # Validate and modify balances in memory.
         usd_wallet.withdraw(cost_usd)
         portfolio.add_currency(code).deposit(amount)
 
-        # Persist the completed trade before recording COMMITTED.
+        # Persist the trade before recording COMMITTED.
         self._save_portfolio(portfolio)
 
         _log_trade_details(
@@ -335,7 +386,7 @@ class TradingService:
         currency_code: str,
         amount: float,
     ) -> Portfolio:
-        """Sell currency at a fresh exchange rate."""
+        """Sell currency using a fresh exchange rate."""
         Wallet._validate_amount(amount)
 
         currency = create_currency(currency_code)
@@ -356,14 +407,14 @@ class TradingService:
         currency_wallet = portfolio.get_wallet(code)
         usd_wallet = portfolio.add_currency("USD")
 
-        if not (usd_wallet.balance + proceeds_usd < float("inf")):
+        if not math.isfinite(usd_wallet.balance + proceeds_usd):
             raise ValueError("Баланс USD превышает допустимое значение")
 
-        # Validate and perform the trade in memory.
+        # Validate and modify balances in memory.
         currency_wallet.withdraw(amount)
         usd_wallet.deposit(proceeds_usd)
 
-        # Persist the completed trade before recording COMMITTED.
+        # Persist the trade before recording COMMITTED.
         self._save_portfolio(portfolio)
 
         _log_trade_details(
@@ -381,10 +432,10 @@ class TradingService:
         self,
         user_id: int,
     ) -> float:
-        """Calculate portfolio value using saved exchange rates.
+        """Calculate portfolio value using cached exchange rates.
 
-        This valuation may use stale exchange rates.
-        Trading operations always require fresh rates.
+        Valuation may use stale rates, while trading always
+        requires fresh observations.
         """
         portfolio = self.get_portfolio(user_id)
         rates = {}

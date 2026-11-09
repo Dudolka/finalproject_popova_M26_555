@@ -1,4 +1,3 @@
-
 """Tests for the Portfolio domain model."""
 
 import unittest
@@ -168,9 +167,7 @@ class TestPortfolio(unittest.TestCase):
         self.portfolio.add_currency("EUR").deposit(10)
 
         with self.assertRaises(ValueError):
-            self.portfolio.get_total_value(
-                {"EUR": -1.0}
-            )
+            self.portfolio.get_total_value({"EUR": -1.0})
 
     def test_invalid_base_rate(self):
         self.portfolio.add_currency("USD").deposit(100)
@@ -192,9 +189,7 @@ class TestPortfolio(unittest.TestCase):
                 self.subTest(rate=invalid_rate),
                 self.assertRaises(ValueError),
             ):
-                self.portfolio.get_total_value(
-                    {"BTC": invalid_rate}
-                )
+                self.portfolio.get_total_value({"BTC": invalid_rate})
 
     def test_non_finite_base_rate(self):
         self.portfolio.add_currency("USD").deposit(100)
@@ -216,9 +211,7 @@ class TestPortfolio(unittest.TestCase):
         self.portfolio.add_currency("EUR").deposit(1e308)
 
         with self.assertRaises(ValueError):
-            self.portfolio.get_total_value(
-                {"EUR": 2.0}
-            )
+            self.portfolio.get_total_value({"EUR": 2.0})
 
     def test_invalid_portfolio_owner(self):
         with self.assertRaises(TypeError):

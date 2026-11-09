@@ -2,6 +2,7 @@
 
 import unittest
 from contextlib import redirect_stdout
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -17,6 +18,7 @@ class TestValutaTradeCLI(unittest.TestCase):
         self.cli = ValutaTradeCLI.__new__(ValutaTradeCLI)
 
         self.cli._settings = Mock()
+        self.cli._settings.rates_ttl_seconds = 3600
         self.cli._database = Mock()
         self.cli._users = Mock()
         self.cli._trading = Mock()
@@ -308,15 +310,13 @@ class TestValutaTradeCLI(unittest.TestCase):
             "last_refresh": "2026-11-09T10:00:00+00:00",
         }
 
-        self.cli._updater.is_fresh.return_value = True
-
         _, output = self._execute("show-rates")
 
         self.assertIn("BTC_USD", output)
         self.assertIn("ETH_USD", output)
         self.assertIn("EUR_USD", output)
         self.assertIn("RUB_USD", output)
-        self.assertIn("актуальны", output)
+        self.assertIn("устарел", output)
 
     def test_get_rate_success(self):
         """Display a saved BTC exchange rate."""
@@ -330,7 +330,7 @@ class TestValutaTradeCLI(unittest.TestCase):
         _, output = self._execute("get-rate BTC")
 
         self.assertIn("50000.00000000 USD", output)
-        self.assertIn("устарели", output)
+        self.assertIn("устарел", output)
 
     def test_get_rate_missing(self):
         """Handle a missing exchange rate."""
@@ -351,7 +351,7 @@ class TestValutaTradeCLI(unittest.TestCase):
 
     def test_update_rates_success(self):
         """Call RatesUpdater when update-rates is entered."""
-        self.cli._updater.update_rates.return_value = {
+        self.cli._updater.run_update.return_value = {
             "pairs": {
                 "BTC_USD": 50000.0,
                 "ETH_USD": 2500.0,
@@ -363,16 +363,16 @@ class TestValutaTradeCLI(unittest.TestCase):
 
         _, output = self._execute("update-rates")
 
-        self.assertIn("Курсы успешно обновлены", output)
+        self.assertIn("Обновление курсов завершено", output)
         self.assertIn("BTC_USD", output)
 
-        self.cli._updater.update_rates.assert_called_once_with(force=True)
+        self.cli._updater.run_update.assert_called_once_with(source=None)
 
     def test_update_rates_failure(self):
         """Handle API failures without terminating the CLI."""
         from valutatrade_hub.core.exceptions import ApiRequestError
 
-        self.cli._updater.update_rates.side_effect = ApiRequestError("API недоступен")
+        self.cli._updater.run_update.side_effect = ApiRequestError("API недоступен")
 
         result, output = self._execute("update-rates")
 
@@ -394,6 +394,190 @@ class TestValutaTradeCLI(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertIn("Ошибка ввода", output)
+
+    @staticmethod
+    def _modern_snapshot(age_seconds=20):
+        """Return a six-pair cache in the current MEPhI JSON format."""
+        timestamp = (datetime.now(UTC) - timedelta(seconds=age_seconds)).isoformat()
+        rates = {
+            "BTC_USD": (50000.0, "CoinGecko"),
+            "ETH_USD": (2500.0, "CoinGecko"),
+            "SOL_USD": (150.0, "CoinGecko"),
+            "EUR_USD": (1.25, "ExchangeRate-API"),
+            "GBP_USD": (1.40, "ExchangeRate-API"),
+            "RUB_USD": (0.01, "ExchangeRate-API"),
+        }
+        return {
+            "pairs": {
+                pair: {
+                    "rate": rate,
+                    "updated_at": timestamp,
+                    "source": source,
+                }
+                for pair, (rate, source) in rates.items()
+            },
+            "last_refresh": timestamp,
+        }
+
+    def test_register_named_username(self):
+        """Accept registration through the required --username flag."""
+        with patch(
+            "valutatrade_hub.cli.interface.getpass",
+            side_effect=["test-password", "test-password"],
+        ):
+            _, output = self._execute("register --username testuser")
+        self.assertIn("зарегистрирован", output)
+        self.cli._users.register.assert_called_once_with("testuser", "test-password")
+
+    def test_register_named_password(self):
+        """Allow explicit credentials without prompting for them."""
+        with patch("valutatrade_hub.cli.interface.getpass") as prompt:
+            _, output = self._execute(
+                "register --username testuser --password test-password"
+            )
+        self.assertIn("зарегистрирован", output)
+        self.cli._users.register.assert_called_once_with("testuser", "test-password")
+        prompt.assert_not_called()
+
+    def test_login_named_username(self):
+        """Authenticate with the --username option."""
+        with patch(
+            "valutatrade_hub.cli.interface.getpass",
+            return_value="test-password",
+        ):
+            _, output = self._execute("login --username testuser")
+        self.assertIn("Вход выполнен", output)
+        self.cli._users.login.assert_called_once_with("testuser", "test-password")
+
+    def test_buy_named_arguments(self):
+        """Buy with --currency and --amount in either order."""
+        self._login()
+        _, output = self._execute("buy --amount 0.01 --currency BTC")
+        self.assertIn("Покупка выполнена", output)
+        self.cli._trading.buy.assert_called_once_with(1, "BTC", 0.01)
+
+    def test_sell_named_arguments(self):
+        """Sell with the required named options."""
+        self._login()
+        _, output = self._execute("sell --currency ETH --amount 0.2")
+        self.assertIn("Продажа выполнена", output)
+        self.cli._trading.sell.assert_called_once_with(1, "ETH", 0.2)
+
+    def test_get_rate_named_pair(self):
+        """Read a named BTC/USD rate from nested cache entries."""
+        self.cli._database.load_rates.return_value = self._modern_snapshot()
+        _, output = self._execute("get-rate --from BTC --to USD")
+        self.assertIn("1 BTC = 50000.00000000 USD", output)
+        self.assertIn("CoinGecko", output)
+        self.assertNotIn("устарел", output)
+
+    def test_get_rate_cross_currency(self):
+        """Compute EUR/GBP using the cached USD base rates."""
+        self.cli._database.load_rates.return_value = self._modern_snapshot()
+        _, output = self._execute("get-rate --from EUR --to GBP")
+        self.assertIn("1 EUR = 0.89285714 GBP", output)
+        self.assertIn("ExchangeRate-API", output)
+
+    def test_get_rate_reverse_usd(self):
+        """Invert the USD value when USD is the source currency."""
+        self.cli._database.load_rates.return_value = self._modern_snapshot()
+        _, output = self._execute("get-rate --from USD --to EUR")
+        self.assertIn("1 USD = 0.80000000 EUR", output)
+
+    def test_get_rate_individual_ttl(self):
+        """Warn when a pair is stale despite fresh last_refresh."""
+        snapshot = self._modern_snapshot()
+        snapshot["pairs"]["BTC_USD"]["updated_at"] = (
+            datetime.now(UTC) - timedelta(hours=2)
+        ).isoformat()
+        self.cli._database.load_rates.return_value = snapshot
+        _, output = self._execute("get-rate --from BTC --to USD")
+        self.assertIn("BTC_USD устарел", output)
+
+    def test_show_rates_named_filters(self):
+        """Filter by currency and limit the number of displayed rows."""
+        self.cli._database.load_rates.return_value = self._modern_snapshot()
+        _, output = self._execute("show-rates --currency BTC --top 1 --base USD")
+        self.assertIn("BTC_USD", output)
+        self.assertNotIn("ETH_USD", output)
+        self.assertIn("CoinGecko", output)
+
+    def test_show_rates_cross_base(self):
+        """Convert the displayed price into a requested base currency."""
+        self.cli._database.load_rates.return_value = self._modern_snapshot()
+        _, output = self._execute("show-rates --currency BTC --base EUR")
+        self.assertIn("BTC_EUR", output)
+        self.assertIn("40000.00000000", output)
+
+    def test_show_rates_top_limit(self):
+        """Limit displayed rows to the highest rates."""
+        self.cli._database.load_rates.return_value = self._modern_snapshot()
+        _, output = self._execute("show-rates --top 2")
+        self.assertIn("BTC_USD", output)
+        self.assertIn("ETH_USD", output)
+        self.assertNotIn("SOL_USD", output)
+
+    def test_show_rates_invalid_top(self):
+        """Reject invalid --top values instead of crashing."""
+        self.cli._database.load_rates.return_value = self._modern_snapshot()
+        for value in ("0", "-1", "abc"):
+            with self.subTest(value=value):
+                _, output = self._execute(f"show-rates --top {value}")
+                self.assertIn("Ошибка", output)
+
+    def test_show_portfolio_with_base_eur(self):
+        """Convert total portfolio value into EUR."""
+        self._login()
+        self.cli._trading.get_portfolio.return_value = SimpleNamespace(
+            user=self.user,
+            wallets={"USD": SimpleNamespace(balance=100.0)},
+        )
+        self.cli._trading.get_portfolio_value.return_value = 100.0
+        self.cli._database.load_rates.return_value = self._modern_snapshot()
+        _, output = self._execute("show-portfolio --base EUR")
+        self.assertIn("Общая стоимость: 80.00 EUR", output)
+
+    def test_update_rates_source(self):
+        """Pass the chosen API source to the main updater method."""
+        self.cli._updater.run_update.return_value = self._modern_snapshot()
+        _, output = self._execute("update-rates --source coingecko")
+        self.assertIn("Обновление курсов завершено", output)
+        self.cli._updater.run_update.assert_called_once_with(source="coingecko")
+        self.cli._updater.update_rates.assert_not_called()
+
+    def test_update_rates_reject_unknown_source(self):
+        """Reject unknown providers before calling the updater."""
+        _, output = self._execute("update-rates --source unknown")
+        self.assertIn("Ошибка", output)
+        self.cli._updater.run_update.assert_not_called()
+
+    def test_duplicate_flag_rejected(self):
+        """Reject duplicated options to avoid ambiguous trades."""
+        self._login()
+        _, output = self._execute("buy --currency BTC --amount 1 --amount 2")
+        self.assertIn("повторно", output)
+        self.cli._trading.buy.assert_not_called()
+
+    def test_missing_flag_value_rejected(self):
+        """Reject omitted option values without executing a trade."""
+        self._login()
+        _, output = self._execute("buy --currency BTC --amount")
+        self.assertIn("Не указано значение", output)
+        self.cli._trading.buy.assert_not_called()
+
+    def test_missing_required_flag_rejected(self):
+        """Reject an incomplete named trade command."""
+        self._login()
+        _, output = self._execute("buy --currency BTC")
+        self.assertIn("Отсутствуют обязательные параметры", output)
+        self.cli._trading.buy.assert_not_called()
+
+    def test_unknown_flag_rejected(self):
+        """Show an error for unsupported option names."""
+        self._login()
+        _, output = self._execute("buy --currency BTC --amount 1 --unknown value")
+        self.assertIn("Неизвестный параметр", output)
+        self.cli._trading.buy.assert_not_called()
 
 
 if __name__ == "__main__":

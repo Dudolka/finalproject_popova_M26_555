@@ -1,4 +1,3 @@
-
 """Tests for the ValutaTrade Hub rates scheduler."""
 
 import threading
@@ -34,9 +33,7 @@ class TestRatesScheduler(unittest.TestCase):
         """Call the updater without forcing an API refresh."""
         result = self.scheduler.run_once()
 
-        self.updater.update_rates.assert_called_once_with(
-            force=False
-        )
+        self.updater.update_rates.assert_called_once_with(force=False)
         self.assertIn("BTC_USD", result["pairs"])
 
     def test_invalid_interval_zero(self):
@@ -105,9 +102,7 @@ class TestRatesScheduler(unittest.TestCase):
 
         self.scheduler.run()
 
-        self.updater.update_rates.assert_called_once_with(
-            force=False
-        )
+        self.updater.update_rates.assert_called_once_with(force=False)
         self.assertTrue(self.stop_event.is_set())
 
     def test_retry_after_api_error(self):
@@ -119,9 +114,7 @@ class TestRatesScheduler(unittest.TestCase):
             call_count += 1
 
             if call_count == 1:
-                raise ApiRequestError(
-                    "API временно недоступен"
-                )
+                raise ApiRequestError("API временно недоступен")
 
             self.scheduler.stop()
             return {
@@ -139,10 +132,7 @@ class TestRatesScheduler(unittest.TestCase):
 
         self.assertEqual(call_count, 2)
         self.assertTrue(
-            any(
-                "API временно недоступен" in message
-                for message in captured.output
-            )
+            any("API временно недоступен" in message for message in captured.output)
         )
 
     def test_retry_after_os_error(self):

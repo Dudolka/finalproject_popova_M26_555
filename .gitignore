@@ -86,3 +86,5 @@ Thumbs.db
 # pyproject.toml - tracked
 # uv.lock - tracked
 # README.md - tracked
+
+backups/
