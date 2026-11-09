@@ -35,6 +35,25 @@ class TestUserService(unittest.TestCase):
         self.assertEqual(user.username, "olga")
         self.assertTrue(user.verify_password("password123"))
 
+    def test_register_creates_empty_portfolio(self):
+        """Registration persists a linked empty portfolio immediately."""
+        user = self.service.register("olga", "password123")
+        self.assertEqual(
+            self.database.load_portfolios(),
+            [{"user_id": user.user_id, "wallets": {}}],
+        )
+
+    def test_register_rolls_back_user_if_portfolio_write_fails(self):
+        """A failed portfolio write does not leave a registered user."""
+        with (
+            patch.object(
+                self.database, "save_portfolios", side_effect=OSError("disk full")
+            ),
+            self.assertRaises(OSError),
+        ):
+            self.service.register("olga", "password123")
+        self.assertEqual(self.database.load_users(), [])
+
     def test_register_saves_user(self):
         """Test that registration persists user data."""
         self.service.register("olga", "password123")
@@ -137,6 +156,15 @@ class TestDatabase:
 
     def __init__(self, users_file: Path):
         self._users_file = users_file
+        self._portfolios = []
+
+    def load_portfolios(self) -> list:
+        """Return isolated portfolio records."""
+        return list(self._portfolios)
+
+    def save_portfolios(self, portfolios: list) -> None:
+        """Persist portfolio records in the test double."""
+        self._portfolios = list(portfolios)
 
     def load_users(self) -> list:
         """Load users from the temporary JSON file."""

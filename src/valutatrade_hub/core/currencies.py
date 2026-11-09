@@ -148,15 +148,18 @@ class CryptoCurrency(Currency):
 SUPPORTED_CURRENCIES = {
     "USD": ("US Dollar", FiatCurrency),
     "EUR": ("Euro", FiatCurrency),
+    "GBP": ("British Pound", FiatCurrency),
     "RUB": ("Russian Ruble", FiatCurrency),
     "BTC": ("Bitcoin", CryptoCurrency),
     "ETH": ("Ethereum", CryptoCurrency),
+    "SOL": ("Solana", CryptoCurrency),
 }
 
 
 FIAT_ISSUING_COUNTRIES = {
     "USD": "United States",
     "EUR": "Eurozone",
+    "GBP": "United Kingdom",
     "RUB": "Russia",
 }
 
@@ -164,6 +167,7 @@ FIAT_ISSUING_COUNTRIES = {
 CRYPTO_ALGORITHMS = {
     "BTC": "SHA-256",
     "ETH": "Proof of Stake",
+    "SOL": "Proof of History / Proof of Stake",
 }
 
 

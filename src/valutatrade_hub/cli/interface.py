@@ -8,9 +8,10 @@ from typing import Any
 
 from prettytable import PrettyTable
 
-from valutatrade_hub.core.currencies import create_currency
+from valutatrade_hub.core.currencies import CryptoCurrency, create_currency
 from valutatrade_hub.core.exceptions import CurrencyNotFoundError, ValutaTradeError
 from valutatrade_hub.core.usecases import TradingService, UserService
+from valutatrade_hub.core.utils import cross_rate
 from valutatrade_hub.infra.database import DatabaseManager
 from valutatrade_hub.infra.settings import SettingsLoader
 from valutatrade_hub.logging_config import setup_logging
@@ -81,7 +82,7 @@ class ValutaTradeCLI:
         code = value.strip().upper()
         if not 2 <= len(code) <= 5 or not code.isascii() or not code.isalpha():
             raise ValueError(f"Некорректный код валюты: {value!r}")
-        return code
+        return create_currency(code).code
 
     @staticmethod
     def _timestamp(value: object) -> datetime | None:
@@ -229,7 +230,7 @@ class ValutaTradeCLI:
         print(f"Виртуальный баланс пополнен на {amount:.2f} USD.")
 
     def show_portfolio(self, arguments: list[str]) -> None:
-        """Display the user's holdings, optionally valued in another base."""
+        """Display each holding and its estimated value in the chosen base."""
         user_id = self._require_login()
         options = self._options(arguments, allowed=frozenset({"--base"}))
         base = self._code(options.get("--base", "USD"))
@@ -238,25 +239,75 @@ class ValutaTradeCLI:
         if not portfolio.wallets:
             print("Портфель пока пуст.")
             return
+
+        snapshot = None
+        base_rate = 1.0
+        valuation_error = None
+        needs_rates = base != "USD" or any(
+            code != "USD" and wallet.balance > 0
+            for code, wallet in portfolio.wallets.items()
+        )
+        if needs_rates:
+            try:
+                snapshot = self._snapshot()
+                base_rate, _, _ = self._observation(snapshot, base)
+            except (ValutaTradeError, ValueError, OSError, TypeError) as exc:
+                valuation_error = str(exc)
+
         table = PrettyTable()
-        table.field_names = ["Валюта", "Баланс"]
+        table.field_names = ["Валюта", "Баланс", f"Стоимость ({base})"]
         table.align = "l"
         for code, wallet in sorted(portfolio.wallets.items()):
-            table.add_row([code, f"{wallet.balance:.8f}"])
+            valuation = "н/д"
+            if valuation_error is None:
+                try:
+                    usd_rate = (
+                        1.0
+                        if code == "USD" or wallet.balance == 0
+                        else self._observation(snapshot, code)[0]
+                    )
+                    value = wallet.balance * cross_rate(usd_rate, base_rate)
+                    if not math.isfinite(value):
+                        raise ValueError("Результат оценки не является конечным числом")
+                    valuation = f"{value:.2f}"
+                except (ValutaTradeError, ValueError, OSError, TypeError):
+                    pass
+            table.add_row([code, f"{wallet.balance:.8f}", valuation])
         print(table)
         try:
+            if valuation_error is not None:
+                raise ValueError(valuation_error)
             value_usd = self._trading.get_portfolio_value(user_id)
-            if base == "USD":
-                total = value_usd
-            else:
-                rate_base, _, _ = self._observation(self._snapshot(), base)
-                total = value_usd / rate_base
+            total = value_usd / base_rate
             if not math.isfinite(total):
                 raise ValueError("Результат пересчёта не является конечным числом")
         except (ValutaTradeError, ValueError, OSError, TypeError) as exc:
             print(f"Общая стоимость недоступна: {exc}")
         else:
             print(f"Общая стоимость: {total:.2f} {base}")
+
+    def _print_trade_result(
+        self, action: str, code: str, amount: float, portfolio: object
+    ) -> None:
+        """Explain the execution price, settlement and current balances."""
+        print(f"{action} выполнена: {amount:.8f} {code}.")
+        # A successful trade always uses a fresh USD rate in TradingService.
+        # The portfolio is returned by that service after persistence.
+        wallets = getattr(portfolio, "wallets", None)
+        if not isinstance(wallets, dict):
+            return
+        try:
+            rate, _, _ = self._observation(self._snapshot(), code)
+            cost = amount * rate
+            if not math.isfinite(cost):
+                raise ValueError("Некорректная стоимость сделки")
+            print(f"Курс исполнения (по кэшу): 1 {code} = {rate:.8f} USD")
+            print(f"Расчётная сумма: {cost:.2f} USD")
+        except (ValutaTradeError, ValueError, OSError, TypeError):
+            print("Курс сделки недоступен для отображения.")
+        for currency in (code, "USD"):
+            if currency in wallets:
+                print(f"Остаток {currency}: {wallets[currency].balance:.8f}")
 
     def _trade_arguments(self, arguments: list[str], command: str) -> tuple[str, float]:
         """Parse the currency and amount for a simulated trade."""
@@ -276,18 +327,18 @@ class ValutaTradeCLI:
         """Buy a currency using virtual US dollars."""
         user_id = self._require_login()
         code, amount = self._trade_arguments(arguments, "buy")
-        self._trading.buy(user_id, code, amount)
-        print(f"Покупка выполнена: {amount:.8f} {code}.")
+        portfolio = self._trading.buy(user_id, code, amount)
+        self._print_trade_result("Покупка", code, amount, portfolio)
 
     def sell(self, arguments: list[str]) -> None:
         """Sell a currency for virtual US dollars."""
         user_id = self._require_login()
         code, amount = self._trade_arguments(arguments, "sell")
-        self._trading.sell(user_id, code, amount)
-        print(f"Продажа выполнена: {amount:.8f} {code}.")
+        portfolio = self._trading.sell(user_id, code, amount)
+        self._print_trade_result("Продажа", code, amount, portfolio)
 
     def get_rate(self, arguments: list[str]) -> None:
-        """Display the cached cross-rate through the USD base."""
+        """Display a cross-rate, refreshing missing or expired observations."""
         if arguments and not arguments[0].startswith("--"):
             self._check_arguments(arguments, 1, "get-rate CODE")
             from_code, to_code = self._code(arguments[0]), "USD"
@@ -302,12 +353,33 @@ class ValutaTradeCLI:
         if from_code == to_code:
             print(f"1 {from_code} = 1 {to_code}")
             return
+
         snapshot = self._snapshot()
+        needed = {from_code, to_code} - {"USD"}
+        must_refresh = False
+        for code in needed:
+            try:
+                _, timestamp, _ = self._observation(snapshot, code)
+            except CurrencyNotFoundError:
+                must_refresh = True
+            else:
+                if not self._rate_is_fresh(timestamp):
+                    must_refresh = True
+
+        if must_refresh:
+            print("Кэш отсутствует или устарел. Пробуем обновить курсы через API...")
+            try:
+                self._updater.run_update(source=None)
+                snapshot = self._snapshot()
+            except (ValutaTradeError, ValueError, OSError, TypeError) as exc:
+                print(f"Обновление не удалось: {exc}")
+                print(
+                    "При наличии сохранённых значений они будут помечены устаревшими."
+                )
+
         from_rate, from_time, from_source = self._observation(snapshot, from_code)
         to_rate, to_time, to_source = self._observation(snapshot, to_code)
-        result = from_rate / to_rate
-        if not math.isfinite(result) or result <= 0:
-            raise ValueError("Некорректный результат пересчёта курса")
+        result = cross_rate(from_rate, to_rate)
         print(f"1 {from_code} = {result:.8f} {to_code}")
         for code, timestamp, source in (
             (from_code, from_time, from_source),
@@ -355,10 +427,12 @@ class ValutaTradeCLI:
                 continue
             if filter_code is not None and from_code != filter_code:
                 continue
+            if top is not None and not isinstance(
+                create_currency(from_code), CryptoCurrency
+            ):
+                continue
             rate, updated_at, source = self._observation(snapshot, from_code)
-            converted = rate / base_rate
-            if not math.isfinite(converted) or converted <= 0:
-                raise ValueError(f"Некорректный курс {pair} при пересчёте")
+            converted = cross_rate(rate, base_rate)
             rows.append((f"{from_code}_{base}", converted, updated_at, source))
         if filter_code == base and not rows:
             rows.append((f"{base}_{base}", 1.0, None, "Расчётный"))

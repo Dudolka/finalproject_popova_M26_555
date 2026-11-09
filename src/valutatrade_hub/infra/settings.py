@@ -64,6 +64,27 @@ class SettingsLoader:
     def exchange_rate_api_key(self) -> str | None:
         return os.getenv("EXCHANGE_RATE_API_KEY")
 
+    def get(self, key: str, default: object = None) -> object:
+        """Read a supported configuration value by name.
+
+        Names are stable application-level keys rather than arbitrary
+        environment variables. Unknown keys return *default*.
+        """
+        if not isinstance(key, str):
+            raise TypeError("Ключ настройки должен быть строкой")
+        accessors = {
+            "data_dir": lambda: self.data_dir,
+            "rates_ttl_seconds": lambda: self.rates_ttl_seconds,
+            "RATES_TTL_SECONDS": lambda: self.rates_ttl_seconds,
+            "base_currency": lambda: "USD",
+            "log_file": lambda: self.log_file,
+            "coingecko_base_url": lambda: self.coingecko_base_url,
+            "exchange_rate_base_url": lambda: self.exchange_rate_base_url,
+            "exchange_rate_api_key": lambda: self.exchange_rate_api_key,
+        }
+        accessor = accessors.get(key)
+        return default if accessor is None else accessor()
+
     @property
     def log_file(self) -> Path:
         return self._project_root / "logs" / "valutatrade.log"

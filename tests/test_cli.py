@@ -572,6 +572,77 @@ class TestValutaTradeCLI(unittest.TestCase):
         self.assertIn("Отсутствуют обязательные параметры", output)
         self.cli._trading.buy.assert_not_called()
 
+    def test_get_rate_attempts_refresh_for_stale_pair(self):
+        """A stale pair triggers an API update and a fresh cache read."""
+        stale = self._modern_snapshot(age_seconds=8000)
+        fresh = self._modern_snapshot()
+        self.cli._database.load_rates.side_effect = [stale, fresh]
+        _, output = self._execute("get-rate --from BTC --to USD")
+        self.cli._updater.run_update.assert_called_once_with(source=None)
+        self.assertIn("Пробуем обновить", output)
+        self.assertIn("50000.00000000 USD", output)
+        self.assertNotIn("BTC_USD устарел", output)
+
+    def test_get_rate_attempts_refresh_for_missing_pair(self):
+        """A missing pair can be populated by a successful API refresh."""
+        empty = {"pairs": {}, "last_refresh": None}
+        self.cli._database.load_rates.side_effect = [empty, self._modern_snapshot()]
+        _, output = self._execute("get-rate --from SOL --to USD")
+        self.cli._updater.run_update.assert_called_once_with(source=None)
+        self.assertIn("1 SOL = 150.00000000 USD", output)
+
+    def test_get_rate_api_failure_warns_and_shows_stale(self):
+        """An API outage cannot make a stale quote appear current."""
+        from valutatrade_hub.core.exceptions import ApiRequestError
+
+        self.cli._database.load_rates.return_value = self._modern_snapshot(8000)
+        self.cli._updater.run_update.side_effect = ApiRequestError("Сеть недоступна")
+        _, output = self._execute("get-rate --from BTC --to USD")
+        self.assertIn("Обновление не удалось", output)
+        self.assertIn("BTC_USD устарел", output)
+
+    def test_top_only_crypto_even_if_fiat_has_higher_rate(self):
+        """Top N must filter fiat rates before sorting cryptocurrencies."""
+        snapshot = self._modern_snapshot()
+        snapshot["pairs"]["GBP_USD"]["rate"] = 100000.0
+        self.cli._database.load_rates.return_value = snapshot
+        _, output = self._execute("show-rates --top 2")
+        self.assertIn("BTC_USD", output)
+        self.assertIn("ETH_USD", output)
+        self.assertNotIn("GBP_USD", output)
+
+    def test_portfolio_displays_value_per_wallet(self):
+        """The portfolio table contains estimates for individual wallets."""
+        self._login()
+        self.cli._trading.get_portfolio.return_value = SimpleNamespace(
+            user=self.user,
+            wallets={
+                "USD": SimpleNamespace(balance=100.0),
+                "BTC": SimpleNamespace(balance=0.01),
+            },
+        )
+        self.cli._trading.get_portfolio_value.return_value = 600.0
+        self.cli._database.load_rates.return_value = self._modern_snapshot()
+        _, output = self._execute("show-portfolio")
+        self.assertIn("Стоимость (USD)", output)
+        self.assertIn("500.00", output)
+        self.assertIn("600.00 USD", output)
+
+    def test_successful_buy_displays_execution_details(self):
+        """A committed trade displays rate, cost and remaining balances."""
+        self._login()
+        self.cli._database.load_rates.return_value = self._modern_snapshot()
+        self.cli._trading.buy.return_value = SimpleNamespace(
+            wallets={
+                "BTC": SimpleNamespace(balance=0.01),
+                "USD": SimpleNamespace(balance=500.0),
+            }
+        )
+        _, output = self._execute("buy --currency BTC --amount 0.01")
+        self.assertIn("Курс исполнения", output)
+        self.assertIn("500.00 USD", output)
+        self.assertIn("Остаток USD", output)
+
     def test_unknown_flag_rejected(self):
         """Show an error for unsupported option names."""
         self._login()

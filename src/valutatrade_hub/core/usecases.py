@@ -114,8 +114,26 @@ class UserService:
 
         user.change_password(password)
 
+        # Keep the user and their empty portfolio in sync.  The JSON files
+        # cannot be replaced as one transaction, so compensate if the second
+        # write fails.  Registration is never reported as successful in that case.
+        portfolios = self._database.load_portfolios()
+        if any(item["user_id"] == next_user_id for item in portfolios):
+            raise ValueError("Портфель для нового ID уже существует")
         users_data.append(user.to_dict())
         self._database.save_users(users_data)
+        try:
+            self._database.save_portfolios(
+                [*portfolios, {"user_id": next_user_id, "wallets": {}}]
+            )
+        except Exception:
+            try:
+                self._database.save_users(users_data[:-1])
+            except Exception:
+                logger.exception(
+                    "Не удалось отменить регистрацию после ошибки портфеля"
+                )
+            raise
 
         return user
 

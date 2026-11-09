@@ -38,6 +38,11 @@ class TestCurrencies(unittest.TestCase):
         self.assertEqual(currency.name, "Bitcoin")
         self.assertEqual(currency.currency_type, "crypto")
 
+    def test_parser_currencies_also_supported_by_core(self):
+        """GBP and SOL remain tradable when their quotes are parsed."""
+        self.assertIsInstance(get_currency("GBP"), FiatCurrency)
+        self.assertIsInstance(get_currency("SOL"), CryptoCurrency)
+
     def test_inheritance(self):
         """Factory returns instances of the correct hierarchy."""
         currency = create_currency("BTC")

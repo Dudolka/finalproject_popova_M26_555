@@ -110,6 +110,16 @@ class TestSettingsLoader(unittest.TestCase):
         self.assertTrue(self.settings.coingecko_base_url.startswith("https://"))
         self.assertTrue(self.settings.exchange_rate_base_url.startswith("https://"))
 
+    def test_named_settings_get(self):
+        """Singleton exposes the configuration lookup specified in the task."""
+        self.assertEqual(self.settings.get("base_currency"), "USD")
+        self.assertEqual(
+            self.settings.get("rates_ttl_seconds"), self.settings.rates_ttl_seconds
+        )
+        self.assertEqual(self.settings.get("unknown", 42), 42)
+        with self.assertRaises(TypeError):
+            self.settings.get(None)
+
     def test_log_file(self):
         self.assertEqual(
             self.settings.log_file,
