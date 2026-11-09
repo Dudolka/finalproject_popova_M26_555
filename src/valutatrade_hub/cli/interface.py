@@ -14,6 +14,7 @@ from valutatrade_hub.core.exceptions import (
 from valutatrade_hub.core.usecases import TradingService, UserService
 from valutatrade_hub.infra.database import DatabaseManager
 from valutatrade_hub.infra.settings import SettingsLoader
+from valutatrade_hub.logging_config import setup_logging
 from valutatrade_hub.parser_service.updater import RatesUpdater
 
 
@@ -406,7 +407,9 @@ class ValutaTradeCLI:
 
 
 def main() -> None:
-    """Start the command-line application."""
+    """Start the command-line application with logging."""
+    setup_logging()
+
     application = ValutaTradeCLI()
     application.run()
 

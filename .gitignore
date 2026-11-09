@@ -1,33 +1,88 @@
-# Python
+
+# ==========================================
+# ValutaTrade Hub - Git Ignore
+# ==========================================
+
+# Python bytecode and cache
 __pycache__/
 *.py[cod]
-.venv/
-*.egg-info/
-dist/
-build/
-
-# Ruff and tests
-.ruff_cache/
+*$py.class
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local Python environments
+.python-version
+
+# Build and distribution artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Test and coverage reports
 .coverage
+.coverage.*
+htmlcov/
+coverage.xml
+test-results/
 
-# macOS and VS Code
-.DS_Store
-.vscode/
+# Application logs
+logs/
+*.log
+*.log.*
 
-# Secrets
+# Environment variables and secrets
 .env
 .env.*
 !.env.example
+!.env.template
+
+# Local configuration with credentials
+secrets.json
+credentials.json
 config.local.json
 
-# Runtime data
-data/*.json
-!data/.gitkeep
+# Runtime-generated application data
+/data/users.json
+/data/portfolios.json
+/data/rates.json
+/data/exchange_rates.json
 
-# Logs
-logs/
-*.log
+# Operating system files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
 
-# Demo recordings
-*.cast
+# Editor and IDE
+.idea/
+.vscode/*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Runtime-generated databases
+*.sqlite
+*.sqlite3
+*.db
+
+# ==========================================
+# Keep project configuration under Git
+# ==========================================
+
+# pyproject.toml - tracked
+# uv.lock - tracked
+# README.md - tracked

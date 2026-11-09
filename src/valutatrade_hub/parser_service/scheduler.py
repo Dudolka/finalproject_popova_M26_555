@@ -5,6 +5,7 @@ import math
 import threading
 
 from valutatrade_hub.core.exceptions import ApiRequestError
+from valutatrade_hub.logging_config import setup_logging
 from valutatrade_hub.parser_service.updater import RatesUpdater
 
 logger = logging.getLogger(__name__)
@@ -71,10 +72,7 @@ class RatesScheduler:
 
 def main() -> None:
     """Run the scheduler as a standalone process."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-    )
+    setup_logging()
 
     scheduler = RatesScheduler()
 
