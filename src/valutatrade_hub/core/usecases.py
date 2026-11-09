@@ -1,5 +1,6 @@
 """Application use cases for ValutaTrade Hub."""
 
+import logging
 from datetime import UTC, datetime
 
 from valutatrade_hub.core.currencies import create_currency
@@ -8,17 +9,53 @@ from valutatrade_hub.core.exceptions import (
     CurrencyNotFoundError,
 )
 from valutatrade_hub.core.models import Portfolio, User, Wallet
+from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.database import DatabaseManager
 from valutatrade_hub.infra.settings import SettingsLoader
 
+logger = logging.getLogger("valutatrade_hub.trading")
 
-def _get_database(database: DatabaseManager | None) -> DatabaseManager:
+
+def _get_database(
+    database: DatabaseManager | None,
+) -> DatabaseManager:
     """Return the injected database or the default database."""
     if database is not None:
         return database
 
     settings = SettingsLoader()
     return DatabaseManager(settings.data_dir)
+
+
+def _safe_username(username: str) -> str:
+    """Remove log-control characters from a username."""
+    return "".join(
+        " " if character in "\r\n\t" else character for character in username
+    )[:100]
+
+
+def _log_trade_details(
+    *,
+    action: str,
+    portfolio: Portfolio,
+    currency_code: str,
+    amount: float,
+    rate: float,
+    total_usd: float,
+) -> None:
+    """Log the details of a successfully saved transaction."""
+    logger.info(
+        "TRADE DETAILS | action=%s | status=COMMITTED "
+        "| user_id=%s | username=%s | currency=%s "
+        "| amount=%.8f | rate_usd=%.8f | total_usd=%.8f",
+        action,
+        portfolio.user.user_id,
+        _safe_username(portfolio.user.username),
+        currency_code,
+        amount,
+        rate,
+        total_usd,
+    )
 
 
 class UserService:
@@ -30,7 +67,11 @@ class UserService:
     ) -> None:
         self._database = _get_database(database)
 
-    def register(self, username: str, password: str) -> User:
+    def register(
+        self,
+        username: str,
+        password: str,
+    ) -> User:
         """Register a new user and save their credentials."""
         if not isinstance(username, str):
             raise TypeError("Имя пользователя должно быть строкой")
@@ -76,7 +117,11 @@ class UserService:
 
         return user
 
-    def login(self, username: str, password: str) -> User:
+    def login(
+        self,
+        username: str,
+        password: str,
+    ) -> User:
         """Authenticate a registered user."""
         if not isinstance(username, str):
             raise TypeError("Имя пользователя должно быть строкой")
@@ -127,7 +172,10 @@ class TradingService:
         self._settings = settings if settings is not None else SettingsLoader()
         self._users = UserService(self._database)
 
-    def get_portfolio(self, user_id: int) -> Portfolio:
+    def get_portfolio(
+        self,
+        user_id: int,
+    ) -> Portfolio:
         """Load a user's portfolio or create one in memory."""
         user = self._users.get_user(user_id)
 
@@ -140,7 +188,10 @@ class TradingService:
 
         return Portfolio(user)
 
-    def _save_portfolio(self, portfolio: Portfolio) -> None:
+    def _save_portfolio(
+        self,
+        portfolio: Portfolio,
+    ) -> None:
         """Save a portfolio without changing other users' data."""
         portfolios = self._database.load_portfolios()
         serialized = portfolio.to_dict()
@@ -154,7 +205,10 @@ class TradingService:
 
         self._database.save_portfolios(portfolios)
 
-    def _check_rate_freshness(self, rates_data: dict) -> None:
+    def _check_rate_freshness(
+        self,
+        rates_data: dict,
+    ) -> None:
         """Reject missing, invalid, future, or expired timestamps."""
         timestamp_value = rates_data.get("last_refresh")
 
@@ -229,6 +283,7 @@ class TradingService:
         self._save_portfolio(portfolio)
         return portfolio
 
+    @log_action
     def buy(
         self,
         user_id: int,
@@ -255,14 +310,25 @@ class TradingService:
         portfolio = self.get_portfolio(user_id)
         usd_wallet = portfolio.add_currency("USD")
 
-        # The withdrawal validates available funds.
+        # Validate and perform the trade in memory.
         usd_wallet.withdraw(cost_usd)
         portfolio.add_currency(code).deposit(amount)
 
-        # Persist only after the complete trade succeeds.
+        # Persist the completed trade before recording COMMITTED.
         self._save_portfolio(portfolio)
+
+        _log_trade_details(
+            action="buy",
+            portfolio=portfolio,
+            currency_code=code,
+            amount=amount,
+            rate=rate,
+            total_usd=cost_usd,
+        )
+
         return portfolio
 
+    @log_action
     def sell(
         self,
         user_id: int,
@@ -290,25 +356,37 @@ class TradingService:
         currency_wallet = portfolio.get_wallet(code)
         usd_wallet = portfolio.add_currency("USD")
 
-        if not usd_wallet.balance + proceeds_usd < float("inf"):
+        if not (usd_wallet.balance + proceeds_usd < float("inf")):
             raise ValueError("Баланс USD превышает допустимое значение")
 
+        # Validate and perform the trade in memory.
         currency_wallet.withdraw(amount)
         usd_wallet.deposit(proceeds_usd)
 
-        # Changes remain in memory until the trade succeeds.
+        # Persist the completed trade before recording COMMITTED.
         self._save_portfolio(portfolio)
+
+        _log_trade_details(
+            action="sell",
+            portfolio=portfolio,
+            currency_code=code,
+            amount=amount,
+            rate=rate,
+            total_usd=proceeds_usd,
+        )
+
         return portfolio
 
-    def get_portfolio_value(self, user_id: int) -> float:
+    def get_portfolio_value(
+        self,
+        user_id: int,
+    ) -> float:
         """Calculate portfolio value using saved exchange rates.
 
-        Note:
-            This valuation may use stale exchange rates.
-            Trading operations always require fresh rates.
+        This valuation may use stale exchange rates.
+        Trading operations always require fresh rates.
         """
         portfolio = self.get_portfolio(user_id)
-
         rates = {}
 
         for code, wallet in portfolio.wallets.items():
