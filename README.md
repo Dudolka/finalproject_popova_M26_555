@@ -259,6 +259,10 @@ uv run ruff format --check .
 
 ## Демонстрация для задания МИФИ
 
+**[Открыть запись демонстрации ValutaTrade Hub (.cast)](https://github.com/Dudolka/finalproject_popova_M26_555/blob/main/demo/ValutaTrade_Hub.cast)**
+
+> GitHub показывает содержимое файла `.cast`, но не воспроизводит его как видео. Для просмотра записи скачайте файл и запустите через asciinema по инструкции ниже.
+
 В папке `demo/` находится asciinema-файл `ValutaTrade_Hub.cast`, а
 `scripts/record_demo.py` записывает воспроизводимую **офлайн-демонстрацию**
 реальных команд CLI с временным хранилищем и **смоделированными** ответами API.
@@ -271,10 +275,11 @@ uv run ruff format --check .
 uv run python scripts/record_demo.py
 ```
 
-Для локального воспроизведения установите asciinema (если требуется) и запустите:
+Для локального воспроизведения установите asciinema через `uv` (Homebrew не требуется):
 
 ```bash
-asciinema play demo/ValutaTrade_Hub.cast
+uv tool install asciinema
+uv tool run --from asciinema asciinema play demo/ValutaTrade_Hub.cast
 ```
 
 **Важно:** запись демонстрирует взаимодействие компонентов приложения, но
