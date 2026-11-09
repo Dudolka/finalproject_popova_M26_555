@@ -3,7 +3,10 @@
 from datetime import UTC, datetime
 
 from valutatrade_hub.core.currencies import create_currency
-from valutatrade_hub.core.exceptions import CurrencyNotFoundError
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+)
 from valutatrade_hub.core.models import Portfolio, User, Wallet
 from valutatrade_hub.infra.database import DatabaseManager
 from valutatrade_hub.infra.settings import SettingsLoader
@@ -118,22 +121,27 @@ class TradingService:
     def __init__(
         self,
         database: DatabaseManager | None = None,
+        settings: SettingsLoader | None = None,
     ) -> None:
         self._database = _get_database(database)
+        self._settings = settings if settings is not None else SettingsLoader()
         self._users = UserService(self._database)
 
     def get_portfolio(self, user_id: int) -> Portfolio:
-        """Load a user's portfolio or create an empty one in memory."""
+        """Load a user's portfolio or create one in memory."""
         user = self._users.get_user(user_id)
 
         for portfolio_data in self._database.load_portfolios():
             if portfolio_data["user_id"] == user_id:
-                return Portfolio.from_dict(portfolio_data, user)
+                return Portfolio.from_dict(
+                    portfolio_data,
+                    user,
+                )
 
         return Portfolio(user)
 
     def _save_portfolio(self, portfolio: Portfolio) -> None:
-        """Save one portfolio while preserving other users' data."""
+        """Save a portfolio without changing other users' data."""
         portfolios = self._database.load_portfolios()
         serialized = portfolio.to_dict()
 
@@ -146,8 +154,44 @@ class TradingService:
 
         self._database.save_portfolios(portfolios)
 
-    def _get_rate(self, currency_code: str) -> float:
-        """Return the USD price of one currency unit."""
+    def _check_rate_freshness(self, rates_data: dict) -> None:
+        """Reject missing, invalid, future, or expired timestamps."""
+        timestamp_value = rates_data.get("last_refresh")
+
+        if not isinstance(timestamp_value, str):
+            raise ApiRequestError(
+                "Время обновления курсов отсутствует. Выполните update-rates."
+            )
+
+        try:
+            timestamp = datetime.fromisoformat(timestamp_value)
+        except ValueError as exc:
+            raise ApiRequestError(
+                "Некорректное время обновления курсов. Выполните update-rates."
+            ) from exc
+
+        if timestamp.tzinfo is None:
+            raise ApiRequestError(
+                "Время обновления курсов не содержит "
+                "часовой пояс. Выполните update-rates."
+            )
+
+        age_seconds = (datetime.now(UTC) - timestamp.astimezone(UTC)).total_seconds()
+
+        if age_seconds < 0 or age_seconds >= self._settings.rates_ttl_seconds:
+            raise ApiRequestError(
+                "Курсы валют устарели или имеют "
+                "некорректное время обновления. "
+                "Выполните update-rates."
+            )
+
+    def _get_rate(
+        self,
+        currency_code: str,
+        *,
+        require_fresh: bool = True,
+    ) -> float:
+        """Return the USD value of one currency unit."""
         code = currency_code.strip().upper()
 
         if code == "USD":
@@ -155,6 +199,7 @@ class TradingService:
 
         rates_data = self._database.load_rates()
         pairs = rates_data.get("pairs", {})
+
         pair = f"{code}_USD"
 
         if pair not in pairs:
@@ -164,9 +209,17 @@ class TradingService:
 
         rate = pairs[pair]
         Wallet._validate_amount(rate)
+
+        if require_fresh:
+            self._check_rate_freshness(rates_data)
+
         return float(rate)
 
-    def deposit_usd(self, user_id: int, amount: float) -> Portfolio:
+    def deposit_usd(
+        self,
+        user_id: int,
+        amount: float,
+    ) -> Portfolio:
         """Add virtual USD funds to a user's portfolio."""
         Wallet._validate_amount(amount)
 
@@ -182,7 +235,7 @@ class TradingService:
         currency_code: str,
         amount: float,
     ) -> Portfolio:
-        """Buy currency using the user's virtual USD balance."""
+        """Buy currency at a fresh exchange rate."""
         Wallet._validate_amount(amount)
 
         currency = create_currency(currency_code)
@@ -191,22 +244,22 @@ class TradingService:
         if code == "USD":
             raise ValueError("Покупка USD за USD не поддерживается")
 
-        rate = self._get_rate(code)
-        cost_usd = amount * rate
+        rate = self._get_rate(
+            code,
+            require_fresh=True,
+        )
 
+        cost_usd = amount * rate
         Wallet._validate_amount(cost_usd)
 
         portfolio = self.get_portfolio(user_id)
         usd_wallet = portfolio.add_currency("USD")
 
-        # Check available funds before changing the portfolio.
-        if cost_usd > usd_wallet.balance:
-            usd_wallet.withdraw(cost_usd)
-
-        # Work with a separate in-memory portfolio copy.
+        # The withdrawal validates available funds.
         usd_wallet.withdraw(cost_usd)
         portfolio.add_currency(code).deposit(amount)
 
+        # Persist only after the complete trade succeeds.
         self._save_portfolio(portfolio)
         return portfolio
 
@@ -216,7 +269,7 @@ class TradingService:
         currency_code: str,
         amount: float,
     ) -> Portfolio:
-        """Sell currency and receive its value in virtual USD."""
+        """Sell currency at a fresh exchange rate."""
         Wallet._validate_amount(amount)
 
         currency = create_currency(currency_code)
@@ -225,37 +278,44 @@ class TradingService:
         if code == "USD":
             raise ValueError("Продажа USD за USD не поддерживается")
 
-        rate = self._get_rate(code)
-        proceeds_usd = amount * rate
+        rate = self._get_rate(
+            code,
+            require_fresh=True,
+        )
 
+        proceeds_usd = amount * rate
         Wallet._validate_amount(proceeds_usd)
 
         portfolio = self.get_portfolio(user_id)
         currency_wallet = portfolio.get_wallet(code)
-
-        # Validate the amount before changing balances.
-        if amount > currency_wallet.balance:
-            currency_wallet.withdraw(amount)
-
         usd_wallet = portfolio.add_currency("USD")
 
-        # Check that the USD balance can accept the proceeds.
         if not usd_wallet.balance + proceeds_usd < float("inf"):
             raise ValueError("Баланс USD превышает допустимое значение")
 
         currency_wallet.withdraw(amount)
         usd_wallet.deposit(proceeds_usd)
 
+        # Changes remain in memory until the trade succeeds.
         self._save_portfolio(portfolio)
         return portfolio
 
     def get_portfolio_value(self, user_id: int) -> float:
-        """Calculate the user's portfolio value in USD."""
+        """Calculate portfolio value using saved exchange rates.
+
+        Note:
+            This valuation may use stale exchange rates.
+            Trading operations always require fresh rates.
+        """
         portfolio = self.get_portfolio(user_id)
 
         rates = {}
+
         for code, wallet in portfolio.wallets.items():
             if code != "USD" and wallet.balance > 0:
-                rates[code] = self._get_rate(code)
+                rates[code] = self._get_rate(
+                    code,
+                    require_fresh=False,
+                )
 
         return portfolio.get_total_value(rates)

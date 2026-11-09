@@ -2,6 +2,8 @@
 
 import copy
 import unittest
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from valutatrade_hub.core.exceptions import InsufficientFundsError
 from valutatrade_hub.core.usecases import TradingService, UserService
@@ -18,7 +20,7 @@ class FakeDatabase:
                 "BTC_USD": 50000.0,
                 "ETH_USD": 2500.0,
             },
-            "last_refresh": None,
+            "last_refresh": datetime.now(UTC).isoformat(),
         }
         self.fail_on_save = False
 
@@ -45,11 +47,22 @@ class TestTradingEdgeCases(unittest.TestCase):
 
     def setUp(self):
         self.database = FakeDatabase()
-        self.users = UserService(database=self.database)
-        self.trading = TradingService(database=self.database)
+        self.settings = SimpleNamespace(rates_ttl_seconds=3600)
 
-        self.first_user = self.users.register("first", "password123")
-        self.second_user = self.users.register("second", "password456")
+        self.users = UserService(database=self.database)
+        self.trading = TradingService(
+            database=self.database,
+            settings=self.settings,
+        )
+
+        self.first_user = self.users.register(
+            "first",
+            "password123",
+        )
+        self.second_user = self.users.register(
+            "second",
+            "password456",
+        )
 
     def test_failed_save_preserves_portfolio(self):
         """A failed save must preserve previously stored data."""
@@ -90,9 +103,18 @@ class TestTradingEdgeCases(unittest.TestCase):
         first = self.trading.get_portfolio(first_id)
         second = self.trading.get_portfolio(second_id)
 
-        self.assertAlmostEqual(first.get_wallet("USD").balance, 500.0)
-        self.assertAlmostEqual(first.get_wallet("BTC").balance, 0.01)
-        self.assertAlmostEqual(second.get_wallet("USD").balance, 2000.0)
+        self.assertAlmostEqual(
+            first.get_wallet("USD").balance,
+            500.0,
+        )
+        self.assertAlmostEqual(
+            first.get_wallet("BTC").balance,
+            0.01,
+        )
+        self.assertAlmostEqual(
+            second.get_wallet("USD").balance,
+            2000.0,
+        )
         self.assertNotIn("BTC", second.wallets)
 
     def test_sell_usd_overflow_preserves_portfolio(self):
@@ -107,7 +129,6 @@ class TestTradingEdgeCases(unittest.TestCase):
 
         before = copy.deepcopy(self.database.portfolios)
 
-        # 1e308 * 50000 overflows to infinity.
         with self.assertRaises(ValueError):
             self.trading.sell(user_id, "BTC", 1e308)
 
@@ -123,8 +144,6 @@ class TestTradingEdgeCases(unittest.TestCase):
         self.database.portfolios[0]["wallets"]["USD"]["balance"] = 1e308
         self.database.portfolios[0]["wallets"]["BTC"]["balance"] = 1e308
 
-        # Proceeds are finite: 1e308 * 1.0 = 1e308.
-        # Adding them to 1e308 USD overflows to infinity.
         self.database.rates["pairs"]["BTC_USD"] = 1.0
 
         before = copy.deepcopy(self.database.portfolios)
