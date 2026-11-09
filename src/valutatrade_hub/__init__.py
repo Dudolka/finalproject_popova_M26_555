@@ -1,2 +1,8 @@
+"""ValutaTrade Hub application package."""
+
+
 def main() -> None:
-    print("Hello from valutatrade-hub!")
+    """Start the ValutaTrade Hub command-line interface."""
+    from valutatrade_hub.cli.interface import main as cli_main
+
+    cli_main()
