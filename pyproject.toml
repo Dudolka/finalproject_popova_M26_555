@@ -1,7 +1,8 @@
+
 [project]
 name = "valutatrade-hub"
 version = "0.1.0"
-description = "Add your description here"
+description = "Educational currency trading platform with exchange rate monitoring"
 readme = "README.md"
 authors = [
     { name = "DudoLka", email = "olgapopova.energy@gmail.com" }
@@ -14,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 valutatrade-hub = "valutatrade_hub:main"
+valutatrade-scheduler = "valutatrade_hub.parser_service.scheduler:main"
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]
